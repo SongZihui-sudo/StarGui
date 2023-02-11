@@ -7,6 +7,7 @@ target("StarGui")
     add_files("src/mainwindow.ui")
     -- add files with Q_OBJECT meta (only for qt.moc)
     add_files("src/mainwindow.h")
+target_end()
 
 --
 -- If you want to known more usage about xmake, please see https://xmake.io

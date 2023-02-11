@@ -4,6 +4,7 @@
 #include <QMainWindow>
 #include <QMouseEvent>
 #include <QString>
+#include <QDir>
 
 namespace Ui
 {
@@ -95,6 +96,7 @@ private:
     bool m_bDragging;         /* 是否正在拖动 */
     QPoint m_poStartPosition; /* 拖动开始前的鼠标位置 */
     QPoint m_poFramePosition; /* 窗体的原始位置 */
+    QDir m_dir;
 };
 
 /* 把 qstring 转 string */

@@ -13,11 +13,6 @@ MainWindow::MainWindow( QWidget* parent )
     ui->setupUi( this );
     this->setWindowFlags( Qt::FramelessWindowHint );
     this->setAttribute( Qt::WA_TranslucentBackground );
-    
-    this->setStyleSheet(" \
-        background-color: Azure;\
-        border-radius: 15px; \
-    " );
 
     this->setWindowOpacity( 0.8 );
 
@@ -230,7 +225,31 @@ void MainWindow::mkdir()
     }
 }
 
-void MainWindow::in_dir() { this->list(); }
+void MainWindow::in_dir() 
+{
+    QString dir_name = ui->listWidget->currentItem()->text();
+    QString path;
+    if ( dir_name == "." )
+    {
+        return;
+    }
+    else if ( dir_name == ".." )
+    {
+        if ( this->m_dir.cdUp() )
+        {
+            path = this->m_dir.path();
+        }
+        else
+        {
+            return;
+        }
+    }
+    else
+    {
+        this->m_dir.cd( dir_name );
+    };
+    this->list();
+}
 
 void MainWindow::login()
 {
@@ -290,14 +309,26 @@ void MainWindow::list()
         QString output = QLatin1String( process.readLine() );
         files.push_back( output );
     }
-    QDir cur_dir( "./" );
-    cur_dir.setFilter( QDir::Dirs );
-    QFileInfoList list = cur_dir.entryInfoList();
+
+    QFileInfoList list = this->m_dir.entryInfoList();
     ui->listWidget->addItems( files );
     QStringList dirs;
     for ( auto item : list )
     {
-        dirs << item.fileName();
+        QString temp;
+        temp.push_back( item.fileName() );
+        if ( item.isFile() )
+        {
+            temp.push_back( "                                                           " );
+            temp.push_back( item.suffix() );
+            temp.push_back( " file" );
+        }
+        else
+        {
+            temp.push_back( "                                                           " );
+            temp.push_back( " dir" );
+        }
+        dirs << temp;
     }
     ui->listWidget->addItems( dirs );
 }
