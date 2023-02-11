@@ -2,9 +2,9 @@
 #include "ui_mainwindow.h"
 #include <QDir>
 #include <QFileDialog>
-#include <QInputDialog>
 #include <QPainter>
 #include <QProcess>
+#include <QInputDialog>
 
 MainWindow::MainWindow( QWidget* parent )
 : QMainWindow( parent )
@@ -13,7 +13,6 @@ MainWindow::MainWindow( QWidget* parent )
     ui->setupUi( this );
     this->setWindowFlags( Qt::FramelessWindowHint );
     this->setAttribute( Qt::WA_TranslucentBackground );
-
     this->setWindowOpacity( 0.8 );
 
     m_bDragging = false;
@@ -175,7 +174,7 @@ void MainWindow::rename()
 {
     bool flag           = true;
     QString rename_name = QInputDialog::getText(
-    this, tr( "File rename" ), tr( "Input file name:" ), QLineEdit::Normal, tr( "new_name" ), &flag );
+    nullptr, tr( "File rename" ), tr( "Input file name:" ), QLineEdit::Normal, tr( "new_name" ), &flag );
     QString file_name = ui->listWidget->currentItem()->text();
     QString cmd       = join_cmd( { "starClient.exe",
                               "--f",
@@ -212,7 +211,7 @@ void MainWindow::mkdir()
 {
     bool flag;
     QString dir_name = QInputDialog::getText(
-    this, tr( "Make new Dir" ), tr( "Input file name:" ), QLineEdit::Normal, tr( "new_dir" ), &flag );
+    nullptr, tr( "Make new Dir" ), tr( "Input file name:" ), QLineEdit::Normal, tr( "new_dir" ), &flag );
     QString cmd = join_cmd( { "starClient.exe", "--mkdir", qstr2str( dir_name ).c_str() } ); /* ∆¥√¸¡Ó */
     QProcess process;
     process.start( cmd );
@@ -268,13 +267,13 @@ void MainWindow::login()
 void MainWindow::regist()
 {
     bool flag;
-    QString user_name = QInputDialog::getText( this,
+    QString user_name = QInputDialog::getText( nullptr,
                                                tr( "Set authentication information" ),
                                                tr( "Input user name:" ),
                                                QLineEdit::Normal,
                                                tr( "admin" ),
                                                &flag );
-    QString user_pwd  = QInputDialog::getText( this,
+    QString user_pwd  = QInputDialog::getText( nullptr,
                                               tr( "Set authentication information" ),
                                               tr( "Input password:" ),
                                               QLineEdit::Normal,

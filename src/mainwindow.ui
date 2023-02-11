@@ -23,8 +23,12 @@
    <bool>false</bool>
   </property>
   <property name="styleSheet">
-   <string notr="true">background-color: rgb(35, 38, 46) ;
-border-radius: 8px; </string>
+   <string notr="true">QWidget
+{
+	background-color: rgb(35, 38, 46) ;
+	border-radius: 8px;
+}；
+</string>
   </property>
   <property name="toolButtonStyle">
    <enum>Qt::ToolButtonTextBesideIcon</enum>
