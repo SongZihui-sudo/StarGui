@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QMouseEvent>
 #include <QString>
 
 namespace Ui
@@ -16,6 +17,11 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow( QWidget* parent = 0 );
     ~MainWindow();
+
+    virtual void paintEvent( QPaintEvent* event ) override;
+    virtual void mousePressEvent( QMouseEvent* event ) override;
+    virtual void mouseMoveEvent( QMouseEvent* event ) override;
+    virtual void mouseReleaseEvent( QMouseEvent* event ) override;
 
     /* 信号槽函数 */
 private slots:
@@ -32,7 +38,7 @@ private slots:
     /*
         移动文件
     */
-    virtual void move();
+    virtual void movefile();
 
     /*
         文件重命名
@@ -69,8 +75,26 @@ private slots:
     */
     virtual void list();
 
+    /*
+        关闭
+    */
+    virtual void close_window();
+
+    /*
+        最小化
+    */
+    virtual void minium_window();
+
+    /*
+        最大化
+    */
+    virtual void maxium_window();
+
 private:
     Ui::MainWindow* ui;
+    bool m_bDragging;         /* 是否正在拖动 */
+    QPoint m_poStartPosition; /* 拖动开始前的鼠标位置 */
+    QPoint m_poFramePosition; /* 窗体的原始位置 */
 };
 
 /* 把 qstring 转 string */

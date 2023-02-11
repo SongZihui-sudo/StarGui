@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QInputDialog>
+#include <QPainter>
 #include <QProcess>
 
 MainWindow::MainWindow( QWidget* parent )
@@ -10,26 +11,85 @@ MainWindow::MainWindow( QWidget* parent )
 , ui( new Ui::MainWindow )
 {
     ui->setupUi( this );
+    this->setWindowFlags( Qt::FramelessWindowHint );
+    this->setAttribute( Qt::WA_TranslucentBackground );
+    
+    this->setStyleSheet(" \
+        background-color: Azure;\
+        border-radius: 15px; \
+    " );
 
+    this->setWindowOpacity( 0.8 );
+
+    m_bDragging = false;
     /* 绑定信号槽函数 */
     connect( ui->upload_file, SIGNAL( clicked() ), this, SLOT( upload() ) ); /* 上传 */
     connect( ui->download_file, SIGNAL( clicked() ), this, SLOT( download() ) ); /* 下载 */
-    connect( ui->move_file, SIGNAL( clicked() ), this, SLOT( move() ) ); /* 移动文件 */
+    connect( ui->move_file, SIGNAL( clicked() ), this, SLOT( movefile() ) ); /* 移动文件 */
     connect( ui->rename_file, SIGNAL( clicked() ), this, SLOT( rename() ) ); /* 重命名文件 */
     connect( ui->delete_file, SIGNAL( clicked() ), this, SLOT( del() ) ); /* 删除文件 */
     connect( ui->mkdir, SIGNAL( clicked() ), this, SLOT( mkdir() ) ); /* 新建文件夹 */
     connect( ui->open_dir, SIGNAL( clicked() ), this, SLOT( in_dir() ) ); /* 进入文件夹 */
     connect( ui->regist, SIGNAL( clicked() ), this, SLOT( regist() ) ); /* 设置用户认证信息 */
     connect( ui->list, SIGNAL( clicked() ), this, SLOT( list() ) ); /* 显示文件列表 */
+    connect( ui->close, SIGNAL( clicked() ), this, SLOT( close_window() ) ); /* 关闭窗口 */
+    connect( ui->minium, SIGNAL( clicked() ), this, SLOT( minium_window() ) ); /* 最小化 */
+    connect( ui->min_big, SIGNAL( clicked() ), this, SLOT( maxium_window() ) ); /* 最大化 */
+
+    this->list();
 }
 
 MainWindow::~MainWindow() { delete ui; }
+
+void MainWindow::paintEvent( QPaintEvent* event )
+{
+    QStyleOption opt;
+    opt.initFrom( this );
+    QPainter painter( this );
+    style()->drawPrimitive( QStyle::PE_Widget, &opt, &painter, this );
+}
+
+//窗口可拖动
+void MainWindow::mousePressEvent( QMouseEvent* event )
+{
+    if ( event->button() == Qt::LeftButton )
+    {
+        QRect rect = ui->centralWidget->rect(); /* rect是鼠标实现可拖动的区域 */
+        rect.setBottom( rect.top() + 220 );
+        if ( rect.contains( event->pos() ) )
+        {
+            m_bDragging       = true;
+            m_poStartPosition = event->globalPos();
+            m_poFramePosition = frameGeometry().topLeft();
+        }
+    }
+    QWidget::mousePressEvent( event );
+}
+
+void MainWindow::mouseMoveEvent( QMouseEvent* event )
+{
+    if ( event->buttons() & Qt::LeftButton ) /* 只响应鼠标所见 */
+    {
+        if ( m_bDragging )
+        {
+            QPoint delta = event->globalPos() - m_poStartPosition;
+            this->move( m_poFramePosition + delta );
+        }
+    }
+    QWidget::mouseMoveEvent( event );
+}
+
+void MainWindow::mouseReleaseEvent( QMouseEvent* event )
+{
+    m_bDragging = false;
+    QWidget::mouseReleaseEvent( event );
+}
 
 void MainWindow::upload()
 {
     QFileDialog* fileDialog = new QFileDialog( this );
 
-    fileDialog->setWindowTitle( QStringLiteral( "选择文件" ) );
+    fileDialog->setWindowTitle( QStringLiteral( "Choose File" ) );
     fileDialog->setDirectory( "./" );
     fileDialog->setNameFilter( tr( "File()" ) );
     fileDialog->setFileMode( QFileDialog::ExistingFiles );
@@ -56,7 +116,7 @@ void MainWindow::download()
 {
     QFileDialog* fileDialog = new QFileDialog( this );
 
-    fileDialog->setWindowTitle( QStringLiteral( "选择文件" ) );
+    fileDialog->setWindowTitle( QStringLiteral( "Choose File" ) );
     fileDialog->setDirectory( "./" );
     fileDialog->setNameFilter( tr( "File()" ) );
     fileDialog->setFileMode( QFileDialog::ExistingFiles );
@@ -84,11 +144,11 @@ void MainWindow::download()
     }
 }
 
-void MainWindow::move()
+void MainWindow::movefile()
 {
     QFileDialog* fileDialog = new QFileDialog( this );
 
-    fileDialog->setWindowTitle( QStringLiteral( "选择文件" ) );
+    fileDialog->setWindowTitle( QStringLiteral( "Choose File" ) );
     fileDialog->setDirectory( "./" );
     fileDialog->setNameFilter( tr( "File()" ) );
     fileDialog->setFileMode( QFileDialog::ExistingFiles );
@@ -120,7 +180,7 @@ void MainWindow::rename()
 {
     bool flag           = true;
     QString rename_name = QInputDialog::getText(
-    this, tr( "文件重命名" ), tr( "请输入文件名：" ), QLineEdit::Normal, tr( "new_name" ), &flag );
+    this, tr( "File rename" ), tr( "Input file name:" ), QLineEdit::Normal, tr( "new_name" ), &flag );
     QString file_name = ui->listWidget->currentItem()->text();
     QString cmd       = join_cmd( { "starClient.exe",
                               "--f",
@@ -157,7 +217,7 @@ void MainWindow::mkdir()
 {
     bool flag;
     QString dir_name = QInputDialog::getText(
-    this, tr( "创建新文件夹" ), tr( "请输入文件夹名：" ), QLineEdit::Normal, tr( "new_dir" ), &flag );
+    this, tr( "Make new Dir" ), tr( "Input file name:" ), QLineEdit::Normal, tr( "new_dir" ), &flag );
     QString cmd = join_cmd( { "starClient.exe", "--mkdir", qstr2str( dir_name ).c_str() } ); /* 拼命令 */
     QProcess process;
     process.start( cmd );
@@ -189,11 +249,19 @@ void MainWindow::login()
 void MainWindow::regist()
 {
     bool flag;
-    QString user_name = QInputDialog::getText(
-    this, tr( "设置认证信息" ), tr( "请输入用户名：" ), QLineEdit::Normal, tr( "admin" ), &flag );
-    QString user_pwd = QInputDialog::getText(
-    this, tr( "设置认证信息" ), tr( "请输入密码：" ), QLineEdit::Normal, tr( "xxxx" ), &flag );
-    QString cmd = join_cmd( { "starClient.exe",
+    QString user_name = QInputDialog::getText( this,
+                                               tr( "Set authentication information" ),
+                                               tr( "Input user name:" ),
+                                               QLineEdit::Normal,
+                                               tr( "admin" ),
+                                               &flag );
+    QString user_pwd  = QInputDialog::getText( this,
+                                              tr( "Set authentication information" ),
+                                              tr( "Input password:" ),
+                                              QLineEdit::Normal,
+                                              tr( "xxxx" ),
+                                              &flag );
+    QString cmd       = join_cmd( { "starClient.exe",
                               "--u",
                               qstr2str( user_name ).c_str(),
                               "--reset",
@@ -211,6 +279,7 @@ void MainWindow::regist()
 
 void MainWindow::list()
 {
+    ui->listWidget->clear();                                  /* 清空列表中的内容 */
     QString cmd = join_cmd( { "starClient.exe", "--list" } ); /* 拼命令 */
     QProcess process;
     process.start( cmd );
@@ -231,6 +300,20 @@ void MainWindow::list()
         dirs << item.fileName();
     }
     ui->listWidget->addItems( dirs );
+}
+
+void MainWindow::close_window() { bool b = this->close(); }
+
+void MainWindow::minium_window() { this->showMinimized(); }
+
+void MainWindow::maxium_window() 
+{ 
+    if ( this->isMaximized() )
+    {
+        this->showNormal();
+        return;
+    }
+    this->showMaximized();
 }
 
 QString join_cmd( std::initializer_list< QString > args )
