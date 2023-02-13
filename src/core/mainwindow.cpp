@@ -47,7 +47,27 @@ MainWindow::MainWindow( QWidget* parent )
     this->m_thread_num     = this->m_settings->get( "thread_num" ).asInt();
     this->m_buffer_size    = this->m_settings->get( "buffer_size" ).asInt64();
 
-    this->list();
+    /* 连接下 master server 判断它在没在线 */
+    QTcpSocket* tcpSocket = new QTcpSocket();
+    tcpSocket->setProxy( QNetworkProxy::NoProxy );
+    tcpSocket->connectToHost( QHostAddress( this->m_master_server_info.addr ),
+                              this->m_master_server_info.port );
+
+    /* 等待连接成功 */
+    if ( !tcpSocket->waitForConnected() )
+    {
+        FATAL_STD_STREAM_LOG( g_logger )
+        << "%D"
+        << "Can not connect to the Master Server: " << qstr2str( this->m_master_server_info.addr )
+        << ":" << S( this->m_master_server_info.port ) << " "
+        << "Error: " << qstr2str( tcpSocket->errorString() ) << star::Logger::endl();
+        ui->status_bar->setText( "INFO: Can not connect to the Master Server!" );
+        return;
+    }
+    else
+    {
+        this->list();
+    }
 }
 
 MainWindow::~MainWindow() { delete ui; }
@@ -115,17 +135,17 @@ void MainWindow::upload()
     QFileInfo temp( file_name );
     file_name = temp.fileName();
     
-    QString path = QDir( this->m_dir.currentPath() ).absoluteFilePath( file_name );
-    
+    QString path = QDir( this->m_dir.absolutePath() ).absoluteFilePath( file_name );
     size_t item_index = ui->process_list->count();
-    ui->process_list->addItem(path);
+    ui->process_list->addItem( "Upload: " + this->m_dir.absolutePath() );
+    bool flag{ false };
 
     std::thread upload_thread(
         [&]()
         {
         /* 读取，存储上传断点信息的临时文件 */
         QString temp_file_name = "upload-temp-" + file_name;
-        QString temp_path = QDir( this->m_dir.currentPath() ).absoluteFilePath( temp_file_name );
+        QString temp_path = QDir( this->m_dir.absolutePath() ).absoluteFilePath( temp_file_name );
         QFile temp_file( temp_path );
         size_t beg_index = 0;
 
@@ -198,6 +218,7 @@ void MainWindow::upload()
                 tcpSocket->setProxy( QNetworkProxy::NoProxy );
                 tcpSocket->connectToHost( QHostAddress( this->m_master_server_info.addr ),
                                           this->m_master_server_info.port );
+                flag = true;
 
                 /* 等待连接成功 */
                 if ( !tcpSocket->waitForConnected() )
@@ -209,6 +230,8 @@ void MainWindow::upload()
                     << S( this->m_master_server_info.port ) << " "
                     << "Error: " << qstr2str( tcpSocket->errorString() ) << star::Logger::endl();
                     ui->status_bar->setText("INFO: Can not connect to the Master Server!" );
+
+                    flag = true;
                     return;
                 }
 
@@ -218,13 +241,13 @@ void MainWindow::upload()
             /* 显示进度 */
             INFO_STD_STREAM_LOG( g_logger ) << "upload: " << S( beg_index ) << " B "
                                             << S( fi.size() ) << " B " << star::Logger::endl();
-            QString item = path + "upload: " + S( beg_index ).c_str() + " B "
+            QString item = path + "upload: " + file_name + " " + S( beg_index ).c_str() + " B "
                            + S( fi.size() ).c_str() + " B ";
             ui->process_list->setCurrentRow( item_index );
             QListWidgetItem* current_item = new QListWidgetItem( item );
             ui->process_list->setCurrentItem( current_item );
 
-            system( "cls" );    
+            //system( "cls" );    
 
             /* 写入断点信息 */
             std::string break_info = S( beg_index ) + "\n";
@@ -273,15 +296,20 @@ void MainWindow::upload()
 
         tcpSocket->close();
         });
-    upload_thread.join();
-    this->list();
+    /* 分离线程 */
+    upload_thread.detach();
+
+    QEventLoop loop;
+    loop.exec();
+
+    if ( flag )
+    {
+        this->list();
+    }
 }
 
 bool MainWindow::append( QString file_name, QString buffer, size_t index, QTcpSocket* tcpSocket )
 {
-    /* 文件的路径 */
-    QString path = QDir( this->m_dir.currentPath() ).absoluteFilePath( file_name );
-
     /* 追加的内容不能太多,只能追加一个chunk的大小 */
     if ( buffer.size() > this->max_chunk_size )
     {
@@ -295,7 +323,7 @@ bool MainWindow::append( QString file_name, QString buffer, size_t index, QTcpSo
     star::protocol::Protocol_Struct ps( 104,
                                   qstr2str( this->m_addr ),
                                   qstr2str( file_name ),
-                                  qstr2str( path ),
+                                        qstr2str( this->m_dir.absolutePath() ),
                                   buffer.size(),
                                   qstr2str( buffer ),
                                   { S( index ), qstr2str( this->m_addr ) } );
@@ -352,19 +380,9 @@ bool MainWindow::append( QString file_name, QString buffer, size_t index, QTcpSo
 
 star::file_meta_data MainWindow::get_file_meta_data( QString file_name, QString file_path )
 {
-    QString path;
-    if ( file_path == "UNKNOW" )
-    {
-        path = QDir( this->m_dir.currentPath() ).absoluteFilePath( file_name );
-    }
-    else
-    {
-        path = file_path;
-    }
-
     /* 询问这个文件的元数据 */
     star::protocol::Protocol_Struct ps(
-    101, "", qstr2str( file_name ), qstr2str( path ), 0, "", {} );
+    101, "", qstr2str( file_name ), qstr2str( this->m_dir.absolutePath() ), 0, "", {} );
     star::protocol::ptr current_protocol( new star::protocol( "get_file_meta_data", ps ) );
     current_protocol->Serialize();
     QString jsonStr = current_protocol->toStr().c_str();
@@ -457,11 +475,7 @@ void MainWindow::download()
     fileDialog->setFileMode( QFileDialog::ExistingFiles );
     fileDialog->setViewMode( QFileDialog::Detail );
 
-    QString download_path;
-    if ( fileDialog->exec() )
-    {
-        fileDialog->selectFile( download_path );
-    }
+    QString download_path = fileDialog->getExistingDirectory();
     QString file_name = ui->listWidget->currentItem()->text();
     
     /* 获取文件的元数据 */
@@ -472,173 +486,213 @@ void MainWindow::download()
         WERN_STD_STREAM_LOG( g_logger ) << "The file chunk list is empty!" << star::Logger::endl();
         return;
     }
+    
+    size_t item_index = ui->process_list->count();
+    ui->process_list->addItem( "Download: " + file_name );
+    bool flag{ false };
 
-    QString file_buffer;
-    QTcpSocket* tcpSocket = new QTcpSocket();
-    tcpSocket->setProxy( QNetworkProxy::NoProxy );
+    std::thread download_thread(
+    [&]() {
+        ui->status_bar->setText( "Downloading file: " + file_name + " ................" );
+        QString file_buffer;
+        QTcpSocket* tcpSocket = new QTcpSocket();
+        tcpSocket->setProxy( QNetworkProxy::NoProxy );
 
-    /* 读取，存储下载断点信息的临时文件 */
-    QString temp_file_name = "download-temp-" + file_name;
-    QString temp_path = QDir( this->m_dir.currentPath() ).absoluteFilePath( temp_file_name );
-    QFile temp_file( temp_path );
-    size_t beg_index         = 0;
-    size_t start_chunk_index = 0;
-    if ( !temp_file.open( QIODevice::ReadOnly ) )
-    {
-        beg_index = 0;
-    }
-    else
-    {
-        /* 按行读 */
-
-        while ( !temp_file.atEnd() )
+        /* 读取，存储下载断点信息的临时文件 */
+        QString temp_file_name = "download-temp-" + file_name;
+        QString temp_path = QDir( this->m_dir.absolutePath() ).absoluteFilePath( temp_file_name );
+        QFile temp_file( temp_path );
+        size_t beg_index         = 0;
+        size_t start_chunk_index = 0;
+        if ( !temp_file.open( QIODevice::ReadOnly ) )
         {
-            QString buffer = temp_file.readLine();
-            qint64 j       = buffer.toLongLong();
-            if ( j >= beg_index )
+            beg_index = 0;
+        }
+        else
+        {
+            /* 按行读 */
+
+            while ( !temp_file.atEnd() )
             {
-                beg_index = j;
+                QString buffer = temp_file.readLine();
+                qint64 j       = buffer.toLongLong();
+                if ( j >= beg_index )
+                {
+                    beg_index = j;
+                }
             }
-        }
-        temp_file.close();
-    }
-
-    if ( !current_file.chunk_list.empty() )
-    {
-        int i = beg_index;
-        int chunk_index
-        = beg_index % 67108864; /* 与64mb取余, 如果有余数，除以数据包的大小，计算出数据包的偏移 */
-        if ( chunk_index > 0 )
-        {
-            start_chunk_index = chunk_index / this->max_chunk_size;
-        }
-        chunk_index = beg_index / 67108864;
-        std::vector< star::chunk_meta_data > chunk_list;
-
-        if ( chunk_index > current_file.chunk_list.size() )
-        {
-            chunk_index = 0;
-        }
-        for ( size_t i = chunk_index; i < current_file.chunk_list.size(); i++ )
-        {
-            chunk_list.push_back( current_file.chunk_list[i] );
+            temp_file.close();
         }
 
-        for ( auto item : chunk_list )
+        if ( !current_file.chunk_list.empty() )
         {
-            QString path = QDir( this->m_dir.currentPath() ).absoluteFilePath( file_name );
-            star::protocol::Protocol_Struct ps(
-            110, "", qstr2str( file_name ), qstr2str( path ), 0, "", { S( chunk_index ), S( start_chunk_index ) } );
-            start_chunk_index++;
-            chunk_index++;
-            QString chunk_server_addr = item.from.c_str();
-            int64_t chunk_server_port = item.port;
-
-            tcpSocket->connectToHost( QHostAddress( chunk_server_addr ), chunk_server_port );
-
-            /* 等待连接成功 */
-            if ( !tcpSocket->waitForConnected() )
+            int i = beg_index;
+            int chunk_index
+            = beg_index % 67108864; /* 与64mb取余, 如果有余数，除以数据包的大小，计算出数据包的偏移 */
+            if ( chunk_index > 0 )
             {
-                FATAL_STD_STREAM_LOG( g_logger )
-                << "%D"
-                << "Can not connect to the Master Server: "
-                << qstr2str( this->m_master_server_info.addr ) << ":"
-                << S( this->m_master_server_info.port ) << " "
-                << "Error: " << qstr2str( tcpSocket->errorString() ) << star::Logger::endl();
-                return;
+                start_chunk_index = chunk_index / this->max_chunk_size;
+            }
+            chunk_index = beg_index / 67108864;
+            std::vector< star::chunk_meta_data > chunk_list;
+
+            if ( chunk_index > current_file.chunk_list.size() )
+            {
+                chunk_index = 0;
+            }
+            for ( size_t i = chunk_index; i < current_file.chunk_list.size(); i++ )
+            {
+                chunk_list.push_back( current_file.chunk_list[i] );
             }
 
-            star::protocol::ptr current_protocol( new star::protocol( "download_file", ps ) );
-            current_protocol->Serialize();
-            tcpSocket->write( current_protocol->toStr().c_str(), current_protocol->toStr().size() );
-            tcpSocket->flush();
-            size_t k = 0;
-            while ( true )
+            for ( auto item : chunk_list )
             {
-                QString buf = "";
+                star::protocol::Protocol_Struct ps( 110,
+                                                    "",
+                                                    qstr2str( file_name ),
+                                                    qstr2str( this->m_dir.absolutePath() ),
+                                                    0,
+                                                    "",
+                                                    { S( chunk_index ), S( start_chunk_index ) } );
+                start_chunk_index++;
+                chunk_index++;
+                QString chunk_server_addr = item.from.c_str();
+                int64_t chunk_server_port = item.port;
+
+                tcpSocket->connectToHost( QHostAddress( chunk_server_addr ), chunk_server_port );
+
+                /* 等待连接成功 */
+                if ( !tcpSocket->waitForConnected() )
+                {
+                    FATAL_STD_STREAM_LOG( g_logger )
+                    << "%D"
+                    << "Can not connect to the Master Server: "
+                    << qstr2str( this->m_master_server_info.addr ) << ":"
+                    << S( this->m_master_server_info.port ) << " "
+                    << "Error: " << qstr2str( tcpSocket->errorString() ) << star::Logger::endl();
+                    return;
+                }
+
+                star::protocol::ptr current_protocol( new star::protocol( "download_file", ps ) );
+                current_protocol->Serialize();
+                tcpSocket->write( current_protocol->toStr().c_str(),
+                                  current_protocol->toStr().size() );
+                tcpSocket->flush();
+                size_t k = 0;
                 while ( true )
                 {
-                    /* 接收数据 */
-                    if ( !tcpSocket->waitForReadyRead() )
+                    QString buf = "";
+                    while ( true )
                     {
-                        FATAL_STD_STREAM_LOG( g_logger )
-                        << "%D"
-                        << "Can not connect to the Master Server: "
-                        << qstr2str( this->m_master_server_info.addr ) << ":"
-                        << S( this->m_master_server_info.port ) << " "
-                        << "Error: " << qstr2str( tcpSocket->errorString() ) <<star::Logger::endl();
-                        return;
+                        /* 接收数据 */
+                        if ( !tcpSocket->waitForReadyRead() )
+                        {
+                            FATAL_STD_STREAM_LOG( g_logger )
+                            << "%D"
+                            << "Can not connect to the Master Server: "
+                            << qstr2str( this->m_master_server_info.addr ) << ":"
+                            << S( this->m_master_server_info.port ) << " "
+                            << "Error: " << qstr2str( tcpSocket->errorString() )
+                            << star::Logger::endl();
+                            return;
+                        }
+
+                        buf += tcpSocket->read( this->m_buffer_size * 2 );
+                        tcpSocket->flush();
+
+                        /* 判断数据包是不是完全 */
+                        if ( buf[0] != '{' || buf[buf.size() - 2] != '}' )
+                        {
+                            continue;
+                        }
+                        else
+                        {
+                            break;
+                        }
                     }
 
-                    buf += tcpSocket->read( this->m_buffer_size * 2 );
-                    tcpSocket->flush();
+                    star::protocol::Protocol_Struct got_data_buf;
+                    star::protocol::ptr data_protocol( new star::protocol( "get_dataa", got_data_buf ) );
+                    data_protocol->Serialize();
+                    data_protocol->toJson( qstr2str( buf ) );
+                    data_protocol->Deserialize();
+                    got_data_buf = data_protocol->get_protocol_struct();
 
-                    /* 判断数据包是不是完全 */
-                    if ( buf[0] != '{' || buf[buf.size() - 2] != '}' )
+                    if ( got_data_buf.bit == 115 )
                     {
-                        continue;
+                        /* 打开断点信息临时文件，记录断点信息 */
+                        if ( !temp_file.open( QIODevice::ReadWrite | QIODevice::Append ) )
+                        {
+                            FATAL_STD_STREAM_LOG( g_logger )
+                            << "Open Temp file Error!" << star::Logger::endl();
+                            return;
+                        }
+
+                        if ( got_data_buf.data == "chunk end" )
+                        {
+                            break;
+                        }
+                        
+                        INFO_STD_STREAM_LOG( g_logger ) << "Stare package: " << S( k ) << "Successfully"
+                                                        << star::Logger::endl();
+
+                        QString item = this->m_dir.absolutePath() + "download: " + file_name + " "
+                                       + S( k ).c_str() + " packages.";
+                        ui->process_list->setCurrentRow( item_index );
+                        QListWidgetItem* current_item = new QListWidgetItem( item );
+                        ui->process_list->setCurrentItem( current_item );
+
+                        //system( "cls" );
+                        current_file.f_name = got_data_buf.file_name;
+                        current_file.f_path = got_data_buf.path;
+                        file_buffer         = got_data_buf.data.c_str();
+                        int index           = std::stoi( got_data_buf.customize[0] );
+                        /* 追加写入当前的文件块 */
+                        QDir folder( download_path );
+                        QString write_path = folder.absoluteFilePath( file_name );
+                        fileitem fi( write_path, this->max_chunk_size );
+                        fi.bwrite_chunk( file_buffer.toUtf8() );
+                        /* 向临时文件写入下载断点信息 */
+                        std::string break_info = S( i ) + "\n";
+                        temp_file.write( break_info.c_str() );
+                        ps.reset( 141, "", "", "", 0, "recv data ok", {} );
+                        star::protocol::ptr reply_server(
+                        new star::protocol( "reply_server", ps ) );
+                        reply_server->Serialize();
+                        tcpSocket->write( reply_server->toStr().c_str(),
+                                          reply_server->toStr().size() );
+                        tcpSocket->flush();
+                        i += file_buffer.size();
+                        temp_file.close();
                     }
                     else
                     {
-                        break;
+                        ERROR_STD_STREAM_LOG( g_logger )
+                        << "Error Server Reply!" << star::Logger::endl();
                     }
+                    k++;
                 }
-
-                star::protocol::Protocol_Struct got_data_buf;
-                star::protocol::ptr data_protocol( new star::protocol( "get_dataa", got_data_buf ) );
-                data_protocol->Serialize();
-                data_protocol->toJson( qstr2str( buf ) );
-                data_protocol->Deserialize();
-                got_data_buf = data_protocol->get_protocol_struct();
-
-                if ( got_data_buf.bit == 115 )
-                {
-                    /* 打开断点信息临时文件，记录断点信息 */
-                    if ( !temp_file.open( QIODevice::ReadWrite | QIODevice::Append ) )
-                    {
-                        FATAL_STD_STREAM_LOG( g_logger )
-                        << "Open Temp file Error!" << star::Logger::endl();
-                        return;
-                    }
-
-                    if ( got_data_buf.data == "chunk end" )
-                    {
-                        break;
-                    }
-                    INFO_STD_STREAM_LOG( g_logger )
-                    << "Stare package: " << S( k ) << "Successfully" << star::Logger::endl();
-                    system( "cls" );
-                    current_file.f_name = got_data_buf.file_name;
-                    current_file.f_path = got_data_buf.path;
-                    file_buffer         = got_data_buf.data.c_str();
-                    int index           = std::stoi( got_data_buf.customize[0] );
-                    /* 追加写入当前的文件块 */
-                    fileitem fi( download_path, this->max_chunk_size );
-                    fi.bwrite_chunk( file_buffer.toUtf8() );
-                    /* 向临时文件写入下载断点信息 */
-                    std::string break_info = S( i ) + "\n";
-                    temp_file.write( break_info.c_str() );
-                    ps.reset( 141, "", "", "", 0, "recv data ok", {} );
-                    star::protocol::ptr reply_server( new star::protocol( "reply_server", ps ) );
-                    reply_server->Serialize();
-                    tcpSocket->write( reply_server->toStr().c_str(), reply_server->toStr().size() );
-                    tcpSocket->flush();
-                    i += file_buffer.size();
-                    temp_file.close();
-                }
-                else
-                {
-                    ERROR_STD_STREAM_LOG( g_logger )
-                    << "Error Server Reply!" << star::Logger::endl();
-                }
-                k++;
             }
+            flag = true;
+            tcpSocket->close();
+            ui->status_bar->setText( "Downloading file: " + file_name + " Successfully!" );
         }
-        tcpSocket->close();
-    }
-    else
+        else
+        {
+            flag = true;
+            ERROR_STD_STREAM_LOG( g_logger ) << "Not Find the file!" << star::Logger::endl();
+        }
+    } );
+
+    /* 分离线程 */
+    download_thread.detach();
+
+    QEventLoop loog;
+    loog.exec();
+
+    if ( flag )
     {
-        ERROR_STD_STREAM_LOG( g_logger ) << "Not Find the file!" << star::Logger::endl();
+        ui->status_bar->setText( "Download File " + file_name + " ok!" );
     }
 }
 
@@ -656,19 +710,14 @@ void MainWindow::movefile()
     fileDialog->setFileMode( QFileDialog::ExistingFiles );
     fileDialog->setViewMode( QFileDialog::Detail );
 
-    QString move_path;
-    if ( fileDialog->exec() )
-    {
-        fileDialog->selectFile( move_path );
-    }
+    QString move_path = fileDialog->getExistingDirectory();
     QString file_name = ui->listWidget->currentItem()->text();
-    QString path      = QDir( this->m_dir.currentPath() ).absoluteFilePath( file_name );
     star::protocol::Protocol_Struct ps;
 
     /* 初始化协议内容 */
     ps.bit       = 117;
     ps.file_name = qstr2str( file_name );
-    ps.path      = qstr2str( path );
+    ps.path      = qstr2str( this->m_dir.absolutePath() );
     ps.customize.push_back( qstr2str( move_path ) );
     star::protocol::ptr current_protocol( new star::protocol( "move_file", ps ) );
     current_protocol->Serialize();
@@ -714,7 +763,7 @@ void MainWindow::movefile()
     if ( ps.bit == 125 && ps.data == "ok" )
     {
         /* 在本地文件系统移动文件 */
-        QString old_name = path;
+        QString old_name = this->m_dir.absolutePath();
         QString new_name = move_path;
         bool x           = QFile::rename( old_name, new_name );
         if ( !x )
@@ -742,13 +791,12 @@ void MainWindow::rename()
     QString rename_name = QInputDialog::getText(
     nullptr, tr( "File rename" ), tr( "Input file name:" ), QLineEdit::Normal, tr( "new_name" ), &flag );
     QString file_name = ui->listWidget->currentItem()->text();
-    QString path      = QDir( this->m_dir.currentPath() ).absoluteFilePath( file_name );
     star::protocol::Protocol_Struct ps;
 
     /* 初始化协议内容 */
     ps.bit       = 134;
     ps.file_name = qstr2str( file_name );
-    ps.path      = qstr2str( path );
+    ps.path      = qstr2str( this->m_dir.absolutePath() );
     ps.customize.push_back( qstr2str( rename_name ) );
     star::protocol::ptr current_protocol( new star::protocol( "rename_file", ps ) );
     current_protocol->Serialize();
@@ -794,8 +842,8 @@ void MainWindow::rename()
     if ( ps.bit == 140 && ps.data == "ok" )
     {
         /* 在本地文件系统移动文件 */
-        QString old_name = path;
-        QString new_name = QDir( this->m_dir.currentPath() ).absoluteFilePath( rename_name );
+        QString old_name = this->m_dir.absolutePath();
+        QString new_name = QDir( this->m_dir.absolutePath() ).absoluteFilePath( rename_name );
         bool x           = QFile::rename( old_name, new_name );
         if ( !x )
         {
@@ -818,7 +866,6 @@ void MainWindow::del()
 {
     QString file_name = ui->listWidget->currentItem()->text();
     ui->status_bar->setText( "INFO: Remove file: " + file_name + "..............." );
-    QString path      = QDir( this->m_dir.currentPath() ).absoluteFilePath( file_name );
     /* 与 master server 通信，删除元数据 */
     QTcpSocket* tcpSocket = new QTcpSocket();
     tcpSocket->setProxy( QNetworkProxy::NoProxy );
@@ -834,8 +881,13 @@ void MainWindow::del()
         return;
     }
 
-    star::protocol::Protocol_Struct ps(
-    135, qstr2str( this->m_addr ), qstr2str( file_name ), qstr2str( path ), 0, "", {} );
+    star::protocol::Protocol_Struct ps( 135,
+                                        qstr2str( this->m_addr ),
+                                        qstr2str( file_name ),
+                                        qstr2str( this->m_dir.absolutePath() ),
+                                        0,
+                                        "",
+                                        {} );
 
     star::protocol::ptr cur_protocol( new star::protocol( "delete_file_meta_data", ps ) );
     cur_protocol->Serialize();
@@ -881,7 +933,7 @@ void MainWindow::mkdir()
     QString dir_name = QInputDialog::getText(
     nullptr, tr( "Make new Dir" ), tr( "Input file name:" ), QLineEdit::Normal, tr( "new_dir" ), &flag );
 
-    QString path = QDir( this->m_dir.currentPath() ).absoluteFilePath( dir_name );
+    QString path = QDir( this->m_dir.absolutePath() ).absoluteFilePath( dir_name );
     DEBUG_STD_STREAM_LOG( g_logger ) << qstr2str( path ) << star::Logger::endl();
     /* 创建一个文件夹 */
     QDir dir( path );
@@ -926,7 +978,7 @@ void MainWindow::in_dir()
     }
     else
     {
-        this->m_dir.cd( dir_name );
+        this->m_dir.cd(dir_name );
     };
     this->list();
 }
@@ -1074,7 +1126,7 @@ void MainWindow::list()
     {
         return;
     }
-    QString path = this->m_dir.currentPath();
+    QString path = this->m_dir.absolutePath();
     
     /* 初始化协议 */
     star::protocol::Protocol_Struct ps;
@@ -1133,8 +1185,6 @@ void MainWindow::list()
             QString temp_file_name = ps.customize[i].c_str();
             i++;
             QString temp_file_path = ps.customize[i].c_str();
-            QFileInfo fi( temp_file_path );
-            temp_file_path = fi.path();
             i++;
             if ( temp_file_path == path )
             {
@@ -1241,8 +1291,7 @@ bool MainWindow::fileitem::bwrite_chunk( QByteArray buffer )
         FATAL_STD_STREAM_LOG( g_logger ) << "Open File Error!" << star::Logger::endl();
         return false;
     }
-    QDataStream in( &file );
-    in << buffer;
+    file.write( buffer );
 
     file.close();
     return true;
