@@ -11,6 +11,7 @@
 #include <QSharedPointer>
 #include <QTcpSocket>
 #include <star.h>
+#include <QBuffer>
 
 namespace Ui
 {
@@ -32,17 +33,19 @@ public:
         /*
             二进制读文件
          */
-        virtual bool bread_chunk( size_t& index, QByteArray& buffer );
+        virtual bool bread_chunk( size_t& index, QByteArray& buffer ) = 0;
 
         /*
             二进制写文件
          */
-        virtual bool bwrite_chunk( QByteArray buffer );
+        virtual bool bwrite_chunk( QByteArray buffer ) = 0;
 
         /*
             文件的大小
         */
         virtual qint64 size();
+
+        virtual void save() = 0;
 
     protected:
         size_t m_chunk_size;
@@ -184,7 +187,7 @@ static std::string qstr2str( const QString qstr )
 QString join_cmd( std::initializer_list< QString > args );
 
 /*
-    txt 文件
+    文本文件
 */
 class txtFileitem : public MainWindow::fileitem
 {
@@ -192,12 +195,65 @@ public:
     txtFileitem( QString path, size_t chunk_size )
     : MainWindow::fileitem( path, chunk_size ){};
     virtual ~txtFileitem() = default;
+    /*
+        二进制读文件
+    */
+    virtual bool bread_chunk( size_t& index, QByteArray& buffer );
+
+    /*
+        二进制写文件
+     */
+    virtual bool bwrite_chunk( QByteArray buffer );
+
+    void save(){};
 
 public:
     /*
         读取全部内容
     */
     virtual bool readAll( QString& buffer );
+};
+
+/*
+    图片文件
+*/
+class imgFileitem : public MainWindow::fileitem
+{
+public:
+    imgFileitem( QString path, size_t chunk_size )
+    : MainWindow::fileitem( path, chunk_size )
+    {
+        QFileInfo fi( this->m_path );
+        /* 把图片装换成base64 */
+        QImage image( this->m_path );
+        QBuffer buffer( &this->imageData );
+        image.save( &buffer, qstr2str(fi.suffix()).c_str() );
+        this->imageData = this->imageData.toBase64();
+    };
+    virtual ~imgFileitem() = default;
+    /*
+        二进制读文件
+    */
+    virtual bool bread_chunk( size_t& index, QByteArray& buffer );
+
+    /*
+        二进制写文件
+     */
+    virtual bool bwrite_chunk( QByteArray buffer );
+
+    /*
+        保存图片
+    */
+    virtual void save();
+
+public:
+    /*
+        读取全部内容
+    */
+    virtual bool readAll( QString& buffer );
+
+private:
+    QByteArray imageData;
 };
 
 #endif // MAINWINDOW_H

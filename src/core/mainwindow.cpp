@@ -6,6 +6,8 @@
 #include <QInputDialog>
 #include <QNetworkProxy>
 #include <thread>
+#include <QBuffer>
+#include <QMessageBox>
 
 star::Logger::ptr g_logger( STAR_NAME( "global_logger" ) );
 
@@ -169,12 +171,26 @@ void MainWindow::upload()
         temp_file.close();
 
         QByteArray buffer;
-        fileitem fi( path, this->max_chunk_size ); /* 要上传的文件 */
+        QFileInfo temp_file_obj( file_name );
+        fileitem* fi = nullptr;
+        if ( temp_file_obj.suffix() == "txt" )
+        {
+            fi = new txtFileitem( path, this->max_chunk_size );
+        }
+        else if ( temp_file_obj.suffix() == "jpg" || temp_file_obj.suffix() == "png" )
+        {
+            fi = new imgFileitem( path, this->max_chunk_size );
+        }
+        else
+        {
+            ui->status_bar->setText( "This file type is not supported yet!" );
+            return;
+        }
 
         /* 按块读文件并发生给服务端 */
 
         qint64 temp_index = beg_index;
-        if ( temp_index > fi.size() )
+        if ( temp_index > fi->size() )
         {
             ui->status_bar->setText( "INFO: Reach the end of the file!" );
             return;
@@ -199,7 +215,7 @@ void MainWindow::upload()
             return;
         }
 
-        while ( fi.bread_chunk( beg_index, buffer ) )
+        while ( fi->bread_chunk( beg_index, buffer ) )
         {
             /* 打开断点信息临时文件，记录断点信息 */
             if ( !temp_file.open( QIODevice::ReadWrite | QIODevice::Append ) )
@@ -240,9 +256,9 @@ void MainWindow::upload()
 
             /* 显示进度 */
             INFO_STD_STREAM_LOG( g_logger ) << "upload: " << S( beg_index ) << " B "
-                                            << S( fi.size() ) << " B " << star::Logger::endl();
+                                            << S( fi->size() ) << " B " << star::Logger::endl();
             QString item = path + "upload: " + file_name + " " + S( beg_index ).c_str() + " B "
-                           + S( fi.size() ).c_str() + " B ";
+                           + S( fi->size() ).c_str() + " B ";
             ui->process_list->setCurrentRow( item_index );
             QListWidgetItem* current_item = new QListWidgetItem( item );
             ui->process_list->setCurrentItem( current_item );
@@ -310,6 +326,7 @@ void MainWindow::upload()
 
 bool MainWindow::append( QString file_name, QString buffer, size_t index, QTcpSocket* tcpSocket )
 {
+    int size = buffer.size();
     /* 追加的内容不能太多,只能追加一个chunk的大小 */
     if ( buffer.size() > this->max_chunk_size )
     {
@@ -476,7 +493,15 @@ void MainWindow::download()
     fileDialog->setViewMode( QFileDialog::Detail );
 
     QString download_path = fileDialog->getExistingDirectory();
-    QString file_name = ui->listWidget->currentItem()->text();
+    QString file_name;
+    if ( ui->listWidget->currentItem()->text().size() )
+    {
+        file_name = ui->listWidget->currentItem()->text();
+    }
+    else
+    {
+        return;
+    }
     
     /* 获取文件的元数据 */
     star::file_meta_data current_file = this->get_file_meta_data( file_name );
@@ -511,7 +536,6 @@ void MainWindow::download()
         else
         {
             /* 按行读 */
-
             while ( !temp_file.atEnd() )
             {
                 QString buffer = temp_file.readLine();
@@ -544,7 +568,7 @@ void MainWindow::download()
             {
                 chunk_list.push_back( current_file.chunk_list[i] );
             }
-
+            fileitem* fi = nullptr;
             for ( auto item : chunk_list )
             {
                 star::protocol::Protocol_Struct ps( 110,
@@ -617,7 +641,7 @@ void MainWindow::download()
                     data_protocol->toJson( qstr2str( buf ) );
                     data_protocol->Deserialize();
                     got_data_buf = data_protocol->get_protocol_struct();
-
+                    
                     if ( got_data_buf.bit == 115 )
                     {
                         /* 打开断点信息临时文件，记录断点信息 */
@@ -650,8 +674,30 @@ void MainWindow::download()
                         /* 追加写入当前的文件块 */
                         QDir folder( download_path );
                         QString write_path = folder.absoluteFilePath( file_name );
-                        fileitem fi( write_path, this->max_chunk_size );
-                        fi.bwrite_chunk( file_buffer.toUtf8() );
+
+                        QFileInfo temp_file_obj( file_name );
+                        
+                        if ( temp_file_obj.suffix() == "txt" && !fi )
+                        {
+                            fi = new txtFileitem( write_path, this->max_chunk_size );
+                        }
+                        else if ( temp_file_obj.suffix() == "jpg"
+                                  || temp_file_obj.suffix() == "png" && !fi )
+                        {
+                            fi = new imgFileitem( write_path, this->max_chunk_size );
+                        }
+                        else if (!fi)
+                        {
+                            ui->status_bar->setText(
+                            "This file type is not supported yet!" );
+                            return;
+                        }
+                        else
+                        {
+                        }
+
+                        fi->bwrite_chunk( file_buffer.toUtf8() );
+
                         /* 向临时文件写入下载断点信息 */
                         std::string break_info = S( i ) + "\n";
                         temp_file.write( break_info.c_str() );
@@ -675,6 +721,7 @@ void MainWindow::download()
             }
             flag = true;
             tcpSocket->close();
+            fi->save();
             ui->status_bar->setText( "Downloading file: " + file_name + " Successfully!" );
         }
         else
@@ -1248,7 +1295,7 @@ MainWindow::fileitem::fileitem( QString path, size_t chunk_size )
     this->m_chunk_size = chunk_size;
 }
 
-bool MainWindow::fileitem::bread_chunk( size_t& index, QByteArray& buffer )
+bool txtFileitem::bread_chunk( size_t& index, QByteArray& buffer )
 {
     QFile file( this->m_path );
     if ( !file.open( QIODevice::ReadOnly ) )
@@ -1269,7 +1316,7 @@ bool MainWindow::fileitem::bread_chunk( size_t& index, QByteArray& buffer )
 
     /* 读一个块 */
     if ( file_size < this->m_chunk_size )
-    {
+   {
         buffer = file.read( file_size );
         index += file_size;
     }
@@ -1283,7 +1330,7 @@ bool MainWindow::fileitem::bread_chunk( size_t& index, QByteArray& buffer )
     return true;
 }
 
-bool MainWindow::fileitem::bwrite_chunk( QByteArray buffer )
+bool txtFileitem::bwrite_chunk( QByteArray buffer )
 {
     QFile file( this->m_path );
     if ( !file.open( QIODevice::ReadWrite | QIODevice::Append ) )
@@ -1292,6 +1339,7 @@ bool MainWindow::fileitem::bwrite_chunk( QByteArray buffer )
         return false;
     }
     file.write( buffer );
+    file.close();
 
     file.close();
     return true;
@@ -1322,4 +1370,47 @@ qint64 MainWindow::fileitem::size()
         return -1;
     }
     return file.size();
+}
+
+bool imgFileitem::bread_chunk( size_t& index, QByteArray& buffer ) 
+{
+    /* 从 base64 中读出指定字节数的内容*/
+    size_t length = this->imageData.size();
+    
+    QString temp_buffer = this->imageData;
+
+    if ( index >= length )
+    {
+        return false;
+    }
+
+    if ( (length - index) < this->m_chunk_size )
+    {
+        buffer = qstr2str( temp_buffer.mid( index, length - index ) ).c_str();
+        index += length - index;
+        return true;
+    }
+    
+    buffer = qstr2str( temp_buffer.mid( index, this->m_chunk_size ) ).c_str();
+    index += this->m_chunk_size;
+    return true;
+}
+
+bool imgFileitem::bwrite_chunk( QByteArray buffer ) 
+{ 
+    this->imageData.append( buffer );
+    return true; 
+}
+
+bool imgFileitem::readAll( QString& buffer ) 
+{ 
+    buffer = this->imageData;
+    return true;
+}
+
+void imgFileitem::save()
+{
+    QPixmap image;
+    image.loadFromData( QByteArray::fromBase64( this->imageData ) );
+    image.save( this->m_path );
 }
